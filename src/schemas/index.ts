@@ -1,4 +1,8 @@
 // Zod validation schemas for CapCut MCP tools
+//
+// Exports:
+//   *Shape — raw ZodRawShape for passing to McpServer.registerTool's inputSchema
+//   *Schema — assembled ZodObject (strict, with cross-field refinements where needed)
 
 import { z } from 'zod';
 import { ResponseFormat } from '../types.js';
@@ -8,7 +12,7 @@ import {
   AVAILABLE_EFFECTS
 } from '../constants.js';
 
-// Common schemas
+// Common pieces
 export const ResponseFormatSchema = z.nativeEnum(ResponseFormat)
   .default(ResponseFormat.MARKDOWN)
   .describe("Output format: 'markdown' for human-readable or 'json' for machine-readable");
@@ -17,305 +21,149 @@ const UrlSchema = z.string()
   .url('Must be a valid URL')
   .describe('URL to the media file');
 
-// Draft creation schema
-export const CreateDraftSchema = z.object({
-  width: z.number()
-    .int()
-    .min(360, 'Width must be at least 360')
-    .max(4096, 'Width must not exceed 4096')
-    .default(1920)
-    .describe('Video width in pixels'),
-  height: z.number()
-    .int()
-    .min(360, 'Height must be at least 360')
-    .max(4096, 'Height must not exceed 4096')
-    .default(1080)
-    .describe('Video height in pixels'),
-  fps: z.number()
-    .int()
-    .min(24, 'FPS must be at least 24')
-    .max(120, 'FPS must not exceed 120')
-    .default(30)
-    .describe('Frames per second'),
-  response_format: ResponseFormatSchema
-}).strict();
+const DraftIdField = z.string().min(1, 'Draft ID is required');
 
-// Video track schema
-export const AddVideoSchema = z.object({
-  draft_id: z.string()
-    .min(1, 'Draft ID is required')
-    .describe('The ID of the draft to add video to'),
+// A positive-duration time window used by several tools.
+const endAfterStart = <T extends { start: number; end: number }>(d: T) => d.end > d.start;
+const endAfterStartMsg = { message: 'end must be greater than start', path: ['end'] };
+
+// Create draft
+export const CreateDraftShape = {
+  width: z.number().int().min(360).max(4096).default(1920).describe('Video width in pixels'),
+  height: z.number().int().min(360).max(4096).default(1080).describe('Video height in pixels'),
+  fps: z.number().int().min(24).max(120).default(30).describe('Frames per second'),
+  response_format: ResponseFormatSchema
+};
+export const CreateDraftSchema = z.object(CreateDraftShape).strict();
+
+// Add video
+export const AddVideoShape = {
+  draft_id: DraftIdField.describe('The ID of the draft to add video to'),
   video_url: UrlSchema,
-  start: z.number()
-    .min(0, 'Start time must be non-negative')
-    .describe('Start time in seconds'),
-  end: z.number()
-    .positive('End time must be positive')
-    .describe('End time in seconds'),
-  volume: z.number()
-    .min(0, 'Volume must be between 0 and 1')
-    .max(1, 'Volume must be between 0 and 1')
-    .default(1.0)
-    .describe('Audio volume (0.0 to 1.0)'),
-  transition: z.enum(TRANSITIONS as [string, ...string[]])
-    .optional()
-    .describe('Transition effect to apply'),
-  speed: z.number()
-    .min(0.1, 'Speed must be at least 0.1x')
-    .max(10, 'Speed must not exceed 10x')
-    .default(1.0)
-    .describe('Playback speed multiplier'),
+  start: z.number().min(0).describe('Start time in seconds'),
+  end: z.number().positive().describe('End time in seconds'),
+  volume: z.number().min(0).max(1).default(1.0).describe('Audio volume (0.0 to 1.0)'),
+  transition: z.enum(TRANSITIONS as [string, ...string[]]).optional().describe('Transition effect to apply'),
+  speed: z.number().min(0.1).max(10).default(1.0).describe('Playback speed multiplier'),
   response_format: ResponseFormatSchema
-}).strict();
+};
+export const AddVideoSchema = z.object(AddVideoShape).strict().refine(endAfterStart, endAfterStartMsg);
 
-// Audio track schema
-export const AddAudioSchema = z.object({
-  draft_id: z.string()
-    .min(1, 'Draft ID is required')
-    .describe('The ID of the draft to add audio to'),
+// Add audio
+export const AddAudioShape = {
+  draft_id: DraftIdField.describe('The ID of the draft to add audio to'),
   audio_url: UrlSchema,
-  start: z.number()
-    .min(0, 'Start time must be non-negative')
-    .describe('Start time in seconds'),
-  end: z.number()
-    .positive('End time must be positive')
-    .describe('End time in seconds'),
-  volume: z.number()
-    .min(0, 'Volume must be between 0 and 1')
-    .max(1, 'Volume must be between 0 and 1')
-    .default(1.0)
-    .describe('Audio volume (0.0 to 1.0)'),
-  fade_in: z.number()
-    .min(0)
-    .default(0)
-    .describe('Fade in duration in seconds'),
-  fade_out: z.number()
-    .min(0)
-    .default(0)
-    .describe('Fade out duration in seconds'),
+  start: z.number().min(0).describe('Start time in seconds'),
+  end: z.number().positive().describe('End time in seconds'),
+  volume: z.number().min(0).max(1).default(1.0).describe('Audio volume (0.0 to 1.0)'),
+  fade_in: z.number().min(0).default(0).describe('Fade in duration in seconds'),
+  fade_out: z.number().min(0).default(0).describe('Fade out duration in seconds'),
   response_format: ResponseFormatSchema
-}).strict();
+};
+export const AddAudioSchema = z.object(AddAudioShape).strict().refine(endAfterStart, endAfterStartMsg);
 
-// Text schema
-export const AddTextSchema = z.object({
-  draft_id: z.string()
-    .min(1, 'Draft ID is required')
-    .describe('The ID of the draft to add text to'),
-  text: z.string()
-    .min(1, 'Text content is required')
-    .max(500, 'Text must not exceed 500 characters')
-    .describe('The text content to display'),
-  start: z.number()
-    .min(0, 'Start time must be non-negative')
-    .describe('Start time in seconds'),
-  end: z.number()
-    .positive('End time must be positive')
-    .describe('End time in seconds'),
-  font: z.string()
-    .optional()
-    .describe('Font family name'),
-  font_size: z.number()
-    .int()
-    .min(12, 'Font size must be at least 12')
-    .max(200, 'Font size must not exceed 200')
-    .default(48)
-    .describe('Font size in points'),
-  font_color: z.string()
-    .regex(/^#[0-9A-Fa-f]{6}$/, 'Must be a valid hex color (e.g., #FFFFFF)')
-    .default('#FFFFFF')
-    .describe('Font color in hex format'),
-  background_color: z.string()
-    .regex(/^#[0-9A-Fa-f]{6}$/, 'Must be a valid hex color')
-    .optional()
-    .describe('Background color in hex format'),
-  background_alpha: z.number()
-    .min(0, 'Alpha must be between 0 and 1')
-    .max(1, 'Alpha must be between 0 and 1')
-    .default(0.8)
-    .describe('Background opacity (0.0 to 1.0)'),
-  shadow_enabled: z.boolean()
-    .default(false)
-    .describe('Enable text shadow'),
-  shadow_color: z.string()
-    .regex(/^#[0-9A-Fa-f]{6}$/, 'Must be a valid hex color')
-    .default('#000000')
-    .describe('Shadow color in hex format'),
-  position_x: z.number()
-    .min(0)
-    .max(1)
-    .default(0.5)
-    .describe('Horizontal position (0.0 to 1.0, where 0.5 is center)'),
-  position_y: z.number()
-    .min(0)
-    .max(1)
-    .default(0.5)
-    .describe('Vertical position (0.0 to 1.0, where 0.5 is center)'),
-  animation: z.enum(TEXT_ANIMATIONS as [string, ...string[]])
-    .optional()
-    .describe('Animation effect to apply'),
+// Add text
+export const AddTextShape = {
+  draft_id: DraftIdField.describe('The ID of the draft to add text to'),
+  text: z.string().min(1).max(500).describe('The text content to display'),
+  start: z.number().min(0).describe('Start time in seconds'),
+  end: z.number().positive().describe('End time in seconds'),
+  font: z.string().optional().describe('Font family name'),
+  font_size: z.number().int().min(12).max(200).default(48).describe('Font size in points'),
+  font_color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).default('#FFFFFF').describe('Font color in hex format'),
+  background_color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional().describe('Background color in hex format'),
+  background_alpha: z.number().min(0).max(1).default(0.8).describe('Background opacity (0.0 to 1.0)'),
+  shadow_enabled: z.boolean().default(false).describe('Enable text shadow'),
+  shadow_color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).default('#000000').describe('Shadow color in hex format'),
+  position_x: z.number().min(0).max(1).default(0.5).describe('Horizontal position (0.0 to 1.0)'),
+  position_y: z.number().min(0).max(1).default(0.5).describe('Vertical position (0.0 to 1.0)'),
+  animation: z.enum(TEXT_ANIMATIONS as [string, ...string[]]).optional().describe('Animation effect to apply'),
   response_format: ResponseFormatSchema
-}).strict();
+};
+export const AddTextSchema = z.object(AddTextShape).strict().refine(endAfterStart, endAfterStartMsg);
 
-// Image schema
-export const AddImageSchema = z.object({
-  draft_id: z.string()
-    .min(1, 'Draft ID is required')
-    .describe('The ID of the draft to add image to'),
+// Add image
+export const AddImageShape = {
+  draft_id: DraftIdField.describe('The ID of the draft to add image to'),
   image_url: UrlSchema,
-  start: z.number()
-    .min(0, 'Start time must be non-negative')
-    .describe('Start time in seconds'),
-  end: z.number()
-    .positive('End time must be positive')
-    .describe('End time in seconds'),
-  position_x: z.number()
-    .min(0)
-    .max(1)
-    .default(0.5)
-    .describe('Horizontal position (0.0 to 1.0)'),
-  position_y: z.number()
-    .min(0)
-    .max(1)
-    .default(0.5)
-    .describe('Vertical position (0.0 to 1.0)'),
-  scale: z.number()
-    .min(0.1, 'Scale must be at least 0.1')
-    .max(5, 'Scale must not exceed 5')
-    .default(1.0)
-    .describe('Scale multiplier'),
-  rotation: z.number()
-    .min(0)
-    .max(360)
-    .default(0)
-    .describe('Rotation angle in degrees'),
-  animation: z.string()
-    .optional()
-    .describe('Animation effect to apply'),
+  start: z.number().min(0).describe('Start time in seconds'),
+  end: z.number().positive().describe('End time in seconds'),
+  position_x: z.number().min(0).max(1).default(0.5).describe('Horizontal position (0.0 to 1.0)'),
+  position_y: z.number().min(0).max(1).default(0.5).describe('Vertical position (0.0 to 1.0)'),
+  scale: z.number().min(0.1).max(5).default(1.0).describe('Scale multiplier'),
+  rotation: z.number().min(-360).max(360).default(0).describe('Rotation angle in degrees'),
+  animation: z.string().optional().describe('Animation effect to apply'),
   response_format: ResponseFormatSchema
-}).strict();
+};
+export const AddImageSchema = z.object(AddImageShape).strict().refine(endAfterStart, endAfterStartMsg);
 
-// Subtitle schema
-export const AddSubtitleSchema = z.object({
-  draft_id: z.string()
-    .min(1, 'Draft ID is required')
-    .describe('The ID of the draft to add subtitles to'),
-  srt_content: z.string()
-    .min(1, 'SRT content is required')
-    .describe('SRT formatted subtitle content'),
-  font: z.string()
-    .optional()
-    .describe('Font family name'),
-  font_size: z.number()
-    .int()
-    .min(12)
-    .max(100)
-    .default(36)
-    .describe('Font size in points'),
-  font_color: z.string()
-    .regex(/^#[0-9A-Fa-f]{6}$/, 'Must be a valid hex color')
-    .default('#FFFFFF')
-    .describe('Font color in hex format'),
-  background_enabled: z.boolean()
-    .default(true)
-    .describe('Enable background behind text'),
-  background_color: z.string()
-    .regex(/^#[0-9A-Fa-f]{6}$/, 'Must be a valid hex color')
-    .default('#000000')
-    .describe('Background color in hex format'),
+// Add subtitle
+export const AddSubtitleShape = {
+  draft_id: DraftIdField.describe('The ID of the draft to add subtitles to'),
+  srt_content: z.string().min(1).describe('SRT formatted subtitle content'),
+  font: z.string().optional().describe('Font family name'),
+  font_size: z.number().int().min(12).max(100).default(36).describe('Font size in points'),
+  font_color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).default('#FFFFFF').describe('Font color in hex format'),
+  background_enabled: z.boolean().default(true).describe('Enable background behind text'),
+  background_color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).default('#000000').describe('Background color in hex format'),
   response_format: ResponseFormatSchema
-}).strict();
+};
+export const AddSubtitleSchema = z.object(AddSubtitleShape).strict();
 
-// Keyframe schema
-export const AddKeyframeSchema = z.object({
-  draft_id: z.string()
-    .min(1, 'Draft ID is required')
-    .describe('The ID of the draft to add keyframes to'),
-  track_name: z.string()
-    .min(1, 'Track name is required')
-    .describe('Name of the track to animate'),
-  property_types: z.array(z.string())
-    .min(1, 'At least one property type is required')
-    .describe('Properties to animate (e.g., scale_x, scale_y, alpha, rotation)'),
-  times: z.array(z.number())
-    .min(2, 'At least 2 keyframe times are required')
-    .describe('Keyframe times in seconds'),
-  values: z.array(z.string())
-    .min(2, 'At least 2 values are required')
-    .describe('Values for each keyframe'),
+// Add keyframe (times and values must be same length)
+export const AddKeyframeShape = {
+  draft_id: DraftIdField.describe('The ID of the draft to add keyframes to'),
+  track_name: z.string().min(1).describe('Name of the track to animate'),
+  property_types: z.array(z.string()).min(1).describe('Properties to animate'),
+  times: z.array(z.number()).min(2).describe('Keyframe times in seconds'),
+  values: z.array(z.string()).min(2).describe('Values for each keyframe'),
   response_format: ResponseFormatSchema
-}).strict();
+};
+export const AddKeyframeSchema = z.object(AddKeyframeShape).strict().refine(
+  d => d.times.length === d.values.length,
+  { message: 'times and values must have the same length', path: ['values'] }
+);
 
-// Effect schema
-export const AddEffectSchema = z.object({
-  draft_id: z.string()
-    .min(1, 'Draft ID is required')
-    .describe('The ID of the draft to add effect to'),
-  effect_name: z.enum(AVAILABLE_EFFECTS as [string, ...string[]])
-    .describe('Name of the effect to apply'),
-  start: z.number()
-    .min(0, 'Start time must be non-negative')
-    .describe('Start time in seconds'),
-  end: z.number()
-    .positive('End time must be positive')
-    .describe('End time in seconds'),
-  intensity: z.number()
-    .min(0, 'Intensity must be between 0 and 1')
-    .max(1, 'Intensity must be between 0 and 1')
-    .default(0.5)
-    .describe('Effect intensity (0.0 to 1.0)'),
+// Add effect
+export const AddEffectShape = {
+  draft_id: DraftIdField.describe('The ID of the draft to add effect to'),
+  effect_name: z.enum(AVAILABLE_EFFECTS as [string, ...string[]]).describe('Name of the effect to apply'),
+  start: z.number().min(0).describe('Start time in seconds'),
+  end: z.number().positive().describe('End time in seconds'),
+  intensity: z.number().min(0).max(1).default(0.5).describe('Effect intensity (0.0 to 1.0)'),
   response_format: ResponseFormatSchema
-}).strict();
+};
+export const AddEffectSchema = z.object(AddEffectShape).strict().refine(endAfterStart, endAfterStartMsg);
 
-// Sticker schema
-export const AddStickerSchema = z.object({
-  draft_id: z.string()
-    .min(1, 'Draft ID is required')
-    .describe('The ID of the draft to add sticker to'),
+// Add sticker
+export const AddStickerShape = {
+  draft_id: DraftIdField.describe('The ID of the draft to add sticker to'),
   sticker_url: UrlSchema,
-  start: z.number()
-    .min(0, 'Start time must be non-negative')
-    .describe('Start time in seconds'),
-  end: z.number()
-    .positive('End time must be positive')
-    .describe('End time in seconds'),
-  position_x: z.number()
-    .min(0)
-    .max(1)
-    .default(0.5)
-    .describe('Horizontal position (0.0 to 1.0)'),
-  position_y: z.number()
-    .min(0)
-    .max(1)
-    .default(0.5)
-    .describe('Vertical position (0.0 to 1.0)'),
-  scale: z.number()
-    .min(0.1)
-    .max(5)
-    .default(1.0)
-    .describe('Scale multiplier'),
-  rotation: z.number()
-    .min(0)
-    .max(360)
-    .default(0)
-    .describe('Rotation angle in degrees'),
+  start: z.number().min(0).describe('Start time in seconds'),
+  end: z.number().positive().describe('End time in seconds'),
+  position_x: z.number().min(0).max(1).default(0.5).describe('Horizontal position (0.0 to 1.0)'),
+  position_y: z.number().min(0).max(1).default(0.5).describe('Vertical position (0.0 to 1.0)'),
+  scale: z.number().min(0.1).max(5).default(1.0).describe('Scale multiplier'),
+  rotation: z.number().min(-360).max(360).default(0).describe('Rotation angle in degrees'),
   response_format: ResponseFormatSchema
-}).strict();
+};
+export const AddStickerSchema = z.object(AddStickerShape).strict().refine(endAfterStart, endAfterStartMsg);
 
-// Save draft schema
-export const SaveDraftSchema = z.object({
-  draft_id: z.string()
-    .min(1, 'Draft ID is required')
-    .describe('The ID of the draft to save'),
+// Save draft
+export const SaveDraftShape = {
+  draft_id: DraftIdField.describe('The ID of the draft to save'),
   response_format: ResponseFormatSchema
-}).strict();
+};
+export const SaveDraftSchema = z.object(SaveDraftShape).strict();
 
-// Get duration schema
-export const GetDurationSchema = z.object({
+// Get duration
+export const GetDurationShape = {
   url: UrlSchema.describe('URL to the media file to analyze'),
   response_format: ResponseFormatSchema
-}).strict();
+};
+export const GetDurationSchema = z.object(GetDurationShape).strict();
 
-// Export type inference helpers
+// Type inference helpers
 export type CreateDraftInput = z.infer<typeof CreateDraftSchema>;
 export type AddVideoInput = z.infer<typeof AddVideoSchema>;
 export type AddAudioInput = z.infer<typeof AddAudioSchema>;
